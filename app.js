@@ -29,18 +29,45 @@ class Graph {
         this.maxVertexId = 3;
     }
     
+    createRandomInnerVertex() {
+    let sumX = 0, sumY = 0;
+    for (const vId of this.periphery) {
+        const { x, y } = this.vertices[vId];
+        sumX += x;
+        sumY += y;
+    }
+
+    const centerX = sumX / this.periphery.length;
+    const centerY = sumY / this.periphery.length;
+
+    // Small random offset so it doesn't sit exactly at the center
+    return {
+        x: centerX + (Math.random() - 0.5) * 20,
+        y: centerY + (Math.random() - 0.5) * 20
+    };
+}
+
+
     // ROBUST CCW INTERSECTION TEST - Most critical method
-    segmentsIntersect(p1, p2, p3, p4) {
+    doSegmentsIntersect(p1, p2, p3, p4) {
         // CCW orientation test - returns true if A->B->C is counter-clockwise
-        function ccw(A, B, C) {
-            return (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x);
-        }
+        //  ccw(A, B, C) {
+        //     return (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x);
+        // }
         
-        // Two segments intersect if:
-        // 1. Endpoints of first segment are on opposite sides of second segment AND
-        // 2. Endpoints of second segment are on opposite sides of first segment
-        return (ccw(p1, p3, p4) !== ccw(p2, p3, p4)) && 
-               (ccw(p1, p2, p3) !== ccw(p1, p2, p4));
+        // // Two segments intersect if:
+        // // 1. Endpoints of first segment are on opposite sides of second segment AND
+        // // 2. Endpoints of second segment are on opposite sides of first segment
+        // return (ccw(p1, p3, p4) !== ccw(p2, p3, p4)) && 
+        //        (ccw(p1, p2, p3) !== ccw(p1, p2, p4));
+        
+    // Define ccw as a local function (not using 'function' keyword)
+    const ccw = (A, B, C) => {
+        return (C.y - A.y) * (B.x - A.x) > (B.y - A.y) * (C.x - A.x);
+    };
+
+    return (ccw(p1, p3, p4) !== ccw(p2, p3, p4)) && 
+           (ccw(p1, p2, p3) !== ccw(p1, p2, p4));
     }
     
     // Check if two edges share a vertex (allowed intersection)
@@ -77,7 +104,7 @@ class Graph {
                 if (this.edgesShareVertex(newEdge, existingEdgeObj)) continue;
                 
                 // CRITICAL: Test for intersection
-                if (this.segmentsIntersect(newEdge.start, newEdge.end, v1, v2)) {
+                if (this.doSegmentsIntersect(newEdge.start, newEdge.end, v1, v2)) {
                     return {
                         valid: false,
                         message: `New edge would intersect existing edge V${v1.id}-V${v2.id}`,
@@ -90,7 +117,7 @@ class Graph {
             for (const otherNewEdge of newEdges) {
                 if (newEdge === otherNewEdge) continue;
                 if (!this.edgesShareVertex(newEdge, otherNewEdge) && 
-                    this.segmentsIntersect(newEdge.start, newEdge.end, otherNewEdge.start, otherNewEdge.end)) {
+                    this.doSegmentsIntersect(newEdge.start, newEdge.end, otherNewEdge.start, otherNewEdge.end)) {
                     return {
                         valid: false,
                         message: 'New edges would intersect each other'
@@ -230,7 +257,7 @@ class Graph {
                 
                 if (!v1.visible || !v2.visible || !v3.visible || !v4.visible) continue;
                 
-                if (this.segmentsIntersect(v1, v2, v3, v4)) {
+                if (this.doSegmentsIntersect(v1, v2, v3, v4)) {
                     console.error('GRAPH INTEGRITY VIOLATION: Crossing detected!');
                     return {
                         valid: false,
@@ -496,33 +523,89 @@ class Graph {
             this.periphery.reverse();
         }
     }
+
     
     addRandomSegment() {
-        if (this.periphery.length < 2) {
-            return { success: false, message: "Need at least 2 periphery vertices" };
+        if (this.periphery.length < 3) {
+            return { success: false, message: "Need at least 3 periphery vertices" };
         }
-        
-        // Select random segment size (2-6 vertices, but not more than periphery)
-        const maxSegmentSize = Math.min(6, this.periphery.length);
-        const segmentSize = Math.max(2, Math.floor(Math.random() * (maxSegmentSize - 1)) + 2);
-        
-        // Select random starting position
-        const startIdx = Math.floor(Math.random() * this.periphery.length);
-        const endIdx = (startIdx + segmentSize - 1) % this.periphery.length;
-        
-        // Set up the segment
-        this.selectedVertices = [this.periphery[startIdx], this.periphery[endIdx]];
-        
-        // Process the segment selection
-        const result = this.processSegmentSelection();
-        
-        // Clear the temporary selection regardless of result
-        this.selectedVertices = [];
-        this.segmentVertices = [];
-        
-        return result;
+
+        // Always select periphery vertices V1 and V5 (first and last in periphery)
+        const idx1 = 0; // V1
+        const idx2 = this.periphery.length - 1; // V5
+
+        // Get all vertices in the segment between idx1 and idx2 (inclusive)
+        const segmentVertices = this.getPeripherySegment(idx1, idx2);
+
+        // Remove endpoints (V1 and V5), keep only intermediate vertices (e.g., V3, V2, V4)
+        const intermediateVertices = segmentVertices.slice(1, -1);
+
+        if (intermediateVertices.length < 1) {
+            return {
+                success: false,
+                message: "No intermediate vertices found between V1 and V5"
+            };
+        }
+
+        // Find a valid position for the new vertex
+        const newPosition = this.findNonIntersectingPosition(intermediateVertices);
+        if (!newPosition) {
+            return {
+                success: false,
+                message: "Cannot find valid position that maintains planarity - no valid placement found after comprehensive search"
+            };
+        }
+
+        // Validate edges from new vertex to all intermediate vertices
+        const finalValidation = this.validateNewEdges(newPosition, intermediateVertices);
+        if (!finalValidation.valid) {
+            return {
+                success: false,
+                message: `Cannot add vertex: ${finalValidation.message}`
+            };
+        }
+
+        // Add vertex and connect to ALL intermediate vertices
+        const newVertexIdx = this.vertices.length;
+        this.vertices.push({
+            x: newPosition.x,
+            y: newPosition.y,
+            visible: true,
+            id: ++this.maxVertexId
+        });
+
+        for (const vIdx of intermediateVertices) {
+            this.edges.push([newVertexIdx, vIdx]);
+        }
+
+        // Update periphery: insert new vertex between V1 and V5, keep endpoints
+        const newPeriphery = [this.periphery[idx1], newVertexIdx, this.periphery[idx2]];
+        this.periphery = newPeriphery;
+        this.ensureClockwiseOrder();
+
+        // Validate graph integrity
+        const integrityCheck = this.validateGraphIntegrity();
+        if (!integrityCheck.valid) {
+            // Rollback if integrity is compromised
+            this.vertices.pop();
+            this.edges = this.edges.slice(0, -intermediateVertices.length);
+            this.updatePeriphery();
+            return {
+                success: false,
+                message: `Operation rolled back: ${integrityCheck.message}`
+            };
+        }
+
+        return {
+            success: true,
+            message: `Added vertex V${this.maxVertexId} connecting to intermediate vertices (${intermediateVertices.map(i => 'V' + this.vertices[i].id).join(', ')}) - planarity maintained`
+        };
     }
 }
+
+
+//  to add a new vertex touching all vertices between two randomly selected periphery vertices
+
 
 class GraphRenderer {
     constructor(canvas, graph) {
@@ -896,14 +979,14 @@ class GraphApp {
         this.updateUI();
         this.showMessage('Triangle reset - planarity guaranteed', 'success');
     }
-    
+    // original code
     addRandomSegment() {
         const result = this.graph.addRandomSegment();
         this.showDetailedMessage(result.message, result.success ? 'success' : 'error');
         this.renderer.render();
         this.updateUI();
     }
-    
+
     toggleManualMode() {
         this.graph.manualMode = !this.graph.manualMode;
         if (!this.graph.manualMode) {
@@ -923,6 +1006,8 @@ class GraphApp {
         this.renderer.render();
     }
     
+
+
     clearSelection() {
         this.graph.selectedVertices = [];
         this.graph.segmentVertices = [];
