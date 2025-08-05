@@ -954,6 +954,9 @@ class GraphApp {
         document.getElementById('clearSelection').addEventListener('click', (e) => {
             e.preventDefault(); this.clearSelection();
         });
+        document.getElementById('addSelection').addEventListener('click', (e) => {
+            e.preventDefault(); this.addSelection();
+        });
         
         // Canvas listeners
         const canvas = document.getElementById('graphCanvas');
@@ -1006,7 +1009,92 @@ class GraphApp {
         this.renderer.render();
     }
     
+    addSelection() {
+        // Add a new vertex connecting all intermediate vertices between two selected periphery vertices
+        if (!this.graph.manualMode) {
+            this.showMessage('Manual mode must be enabled to add selection', 'error');
+            return;
+        }
 
+        if (this.graph.selectedVertices.length !== 2) {
+            this.showMessage('Select exactly two periphery vertices first', 'error');
+            return;
+        }
+
+        const [v1Idx, v2Idx] = this.graph.selectedVertices;
+        const p1Idx = this.graph.periphery.indexOf(v1Idx);
+        const p2Idx = this.graph.periphery.indexOf(v2Idx);
+
+        if (p1Idx === -1 || p2Idx === -1) {
+            this.showMessage('Selected vertices must be in periphery', 'error');
+            return;
+        }
+
+        // Get all periphery vertices between v1 and v2 (inclusive)
+        const segmentVertices = this.graph.getPeripherySegment(p1Idx, p2Idx);
+
+        // Only use intermediate vertices (exclude endpoints)
+        const intermediateVertices = segmentVertices.slice(1, -1);
+
+        if (intermediateVertices.length < 1) {
+            this.showMessage('No intermediate vertices found between selected endpoints', 'error');
+            return;
+        }
+
+        // Use the same logic as the preview for finding the position
+        // This ensures the preview and actual placement match
+        const previewPosition = this.graph.findNonIntersectingPosition(segmentVertices);
+        const newPosition = previewPosition;
+
+        if (!newPosition) {
+            this.showMessage('Cannot find valid position that maintains planarity - no valid placement found after comprehensive search', 'error');
+            return;
+        }
+
+        // Validate edges
+        const finalValidation = this.graph.validateNewEdges(newPosition, intermediateVertices);
+        if (!finalValidation.valid) {
+            this.showMessage(`Cannot add vertex: ${finalValidation.message}`, 'error');
+            return;
+        }
+
+        // Add vertex and connect to all intermediate vertices
+        const newVertexIdx = this.graph.vertices.length;
+        this.graph.vertices.push({
+            x: newPosition.x,
+            y: newPosition.y,
+            visible: true,
+            id: ++this.graph.maxVertexId
+        });
+        for (const vIdx of intermediateVertices) {
+            this.graph.edges.push([newVertexIdx, vIdx]);
+        }
+        // Update periphery: insert new vertex between endpoints
+        const newPeriphery = [this.graph.periphery[p1Idx], newVertexIdx, this.graph.periphery[p2Idx]];
+        this.graph.periphery = newPeriphery;
+        this.graph.ensureClockwiseOrder();
+
+        // Validate graph integrity
+        const integrityCheck = this.graph.validateGraphIntegrity();
+        if (!integrityCheck.valid) {
+            // Rollback if integrity is compromised
+            this.graph.vertices.pop();
+            this.graph.edges = this.graph.edges.slice(0, -intermediateVertices.length);
+            this.graph.updatePeriphery();
+            this.showDetailedMessage(`Operation rolled back: ${integrityCheck.message}`, 'error');
+        } else {
+            this.showDetailedMessage(
+                `Added vertex V${this.graph.maxVertexId} connecting to intermediate vertices (${intermediateVertices.map(i => 'V' + this.graph.vertices[i].id).join(', ')}) - planarity maintained`,
+                'success'
+            );
+        }
+
+        // Clear selection after adding
+        this.graph.selectedVertices = [];
+        this.graph.segmentVertices = [];
+        this.updateUI();
+        this.renderer.render();
+    }
 
     clearSelection() {
         this.graph.selectedVertices = [];
@@ -1110,12 +1198,75 @@ class GraphApp {
             
             // If we have 2 selected vertices, try to add new vertex
             if (this.graph.selectedVertices.length === 2) {
-                const result = this.graph.processSegmentSelection();
-                this.showDetailedMessage(result.message, result.success ? 'success' : 'error');
-                
+                // Get indices in periphery
+                const [v1Idx, v2Idx] = this.graph.selectedVertices;
+                const p1Idx = this.graph.periphery.indexOf(v1Idx);
+                const p2Idx = this.graph.periphery.indexOf(v2Idx);
+
+                if (p1Idx !== -1 && p2Idx !== -1) {
+                    // Get all periphery vertices between v1 and v2 (inclusive)
+                    const segmentVertices = this.graph.getPeripherySegment(p1Idx, p2Idx);
+
+                    // Only use intermediate vertices (exclude endpoints)
+                    const intermediateVertices = segmentVertices.slice(1, -1);
+
+                    if (intermediateVertices.length > 0) {
+                        // Find valid position for new vertex
+                        const newPosition = this.graph.findNonIntersectingPosition(intermediateVertices);
+                        if (newPosition) {
+                            // Validate edges
+                            const finalValidation = this.graph.validateNewEdges(newPosition, intermediateVertices);
+                            if (finalValidation.valid) {
+                                // Add vertex and connect to all intermediate vertices
+                                const newVertexIdx = this.graph.vertices.length;
+                                this.graph.vertices.push({
+                                    x: newPosition.x,
+                                    y: newPosition.y,
+                                    visible: true,
+                                    id: ++this.graph.maxVertexId
+                                });
+                                for (const vIdx of intermediateVertices) {
+                                    this.graph.edges.push([newVertexIdx, vIdx]);
+                                }
+                                // Update periphery: insert new vertex between endpoints
+                                const newPeriphery = [this.graph.periphery[p1Idx], newVertexIdx, this.graph.periphery[p2Idx]];
+                                this.graph.periphery = newPeriphery;
+                                this.graph.ensureClockwiseOrder();
+
+                                // Validate graph integrity
+                                const integrityCheck = this.graph.validateGraphIntegrity();
+                                if (!integrityCheck.valid) {
+                                    // Rollback if integrity is compromised
+                                    this.graph.vertices.pop();
+                                    this.graph.edges = this.graph.edges.slice(0, -intermediateVertices.length);
+                                    this.graph.updatePeriphery();
+                                    this.showDetailedMessage(`Operation rolled back: ${integrityCheck.message}`, 'error');
+                                } else {
+                                    this.showDetailedMessage(
+                                        `Added vertex V${this.graph.maxVertexId} connecting to intermediate vertices (${intermediateVertices.map(i => 'V' + this.graph.vertices[i].id).join(', ')}) - planarity maintained`,
+                                        'success'
+                                    );
+                                }
+                            } else {
+                                this.showDetailedMessage(`Cannot add vertex: ${finalValidation.message}`, 'error');
+                            }
+                        } else {
+                            this.showDetailedMessage('Cannot find valid position that maintains planarity - no valid placement found after comprehensive search', 'error');
+                        }
+                    } else {
+                        this.showDetailedMessage('No intermediate vertices found between selected endpoints', 'error');
+                    }
+                }
                 // Don't disable manual mode - keep it active for next operation
                 this.updateUI();
             }
+            // if (this.graph.selectedVertices.length === 2) {
+            //     const result = this.graph.processSegmentSelection();
+            //     this.showDetailedMessage(result.message, result.success ? 'success' : 'error');
+                
+            //     // Don't disable manual mode - keep it active for next operation
+            //     this.updateUI();
+            // }
             
             this.renderer.render();
         } else {
